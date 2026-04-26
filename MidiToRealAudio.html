@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIDI → Real Audio Converter</title>
+    <!-- MIDI parser (for reading .mid files) -->
+    <script src="https://unpkg.com/midi-parser-js@4.0.4/js/midi-parser.js"></script>
+    <!-- WebAudioFont engine (soundfont synthesis) -->
+    <script src="https://unpkg.com/webaudiofont@2.1.32/webaudiofont.js"></script>
+    <style>
+        :root {
+            --primary: #0d6efd;
+            --primary-light: #e8f0fe;
+            --success: #198754;
+            --danger: #dc3545;
+            --bg: #f8f9fa;
+            --card: #ffffff;
+            --text: #212529;
+            --border: #dee2e6;
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: linear-gradient(135deg, #f0f4ff 0%, #e6f0ff 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+        }
+        .container {
+            width: 100%;
+            max-width: 700px;
+            background: var(--card);
+            border-radius: 28px;
+            box-shadow: 0 20px 35px rgba(0, 0, 0, 0.08);
+            padding: 2.5rem;
+        }
+        h1 {
+            font-size: 2rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.3rem;
+        }
+        .subtitle {
+            color: #6c757d;
+            margin-bottom: 2rem;
+        }
+        .drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: 20px;
+            padding: 2.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: #fcfdff;
+            margin-bottom: 1.5rem;
+        }
+        .drop-zone.active,
+        .drop-zone:hover {
+            border-color: var(--primary);
+            background: var(--primary-light);
+        }
+        .drop-zone .icon {
+            font-size: 3rem;
+            margin-bottom: 0.5rem;
+        }
+        .file-name {
+            font-weight: 600;
+            color: var(--primary);
+            margin-top: 1rem;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .track-info {
+            background: #f8f9fa;
+            border-radius: 14px;
+            padding: 1.2rem;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+        .track-info h3 {
+            margin-bottom: 0.5rem;
+        }
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.2rem;
+            margin: 1.5rem 0 1rem;
+        }
+        .col {
+            flex: 1;
+            min-width: 200px;
+        }
+        label {
+            font-weight: 600;
+            font-size: 0.85rem;
+            display: block;
+            margin-bottom: 0.3rem;
+            color: #495057;
+        }
+        select,
+        input[type="text"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            font-size: 0.95rem;
+            background: white;
+            transition: border-color 0.15s;
+        }
+        select:focus,
+        input[type="text"]:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.2);
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            width: 100%;
+            padding: 0.9rem;
+            font-weight: 600;
+            font-size: 1.05rem;
+            border-radius: 14px;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: var(--primary);
+            color: white;
+        }
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .btn:not(:disabled):hover {
+            background: #0b5ed7;
+        }
+        .progress {
+            height: 10px;
+            background: #e9ecef;
+            border-radius: 20px;
+            margin-top: 1.5rem;
+            overflow: hidden;
+            display: none;
+        }
+        .progress-fill {
+            width: 0%;
+            height: 100%;
+            background: var(--primary);
+            transition: width 0.3s;
+        }
+        .status {
+            margin-top: 0.6rem;
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+        .download-area {
+            margin-top: 1.8rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 1rem;
+        }
+        .download-link {
+            background: var(--success);
+            color: white;
+            padding: 0.7rem 1.5rem;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-block;
+        }
+        .download-link:hover {
+            filter: brightness(0.9);
+        }
+        audio {
+            flex: 1;
+            min-width: 240px;
+        }
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎼 MIDI → Real Audio</h1>
+        <p class="subtitle">Drop a MIDI file, pick a SoundFont, and get a high‑quality WAV</p>
+
+        <!-- Drag & Drop zone -->
+        <div id="dropZone" class="drop-zone">
+            <div class="icon">📂</div>
+            <strong>Drag & Drop your MIDI file here</strong>
+            <p>or click to browse</p>
+            <input type="file" id="fileInput" accept=".mid,.midi" />
+            <div id="fileName" class="file-name hidden"></div>
+        </div>
+
+        <!-- MIDI analysis -->
+        <div id="trackInfo" class="track-info hidden">
+            <h3>📋 Loaded Instruments</h3>
+            <div id="infoContent"></div>
+        </div>
+
+        <!-- Options -->
+        <div class="row">
+            <div class="col">
+                <label for="soundFontSelect">🎵 SoundFont</label>
+                <select id="soundFontSelect">
+                    <option value="FluidR3_GM.sf2">FluidR3 GM (realistic)</option>
+                    <option value="Arachno.sf2">Arachno (clean)</option>
+                    <option value="TimGM6mb.sf2">TimGM6mb (compact)</option>
+                    <option value="custom">Custom URL…</option>
+                </select>
+                <input type="text" id="customUrl" class="hidden" placeholder="https://.../any.sf2" />
+            </div>
+            <div class="col">
+                <label for="outputFormat">🔊 Format</label>
+                <select id="outputFormat">
+                    <option value="wav">WAV (CD quality)</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Convert button -->
+        <button id="convertBtn" class="btn" disabled>
+            <span>⚡ Convert to Audio</span>
+        </button>
+
+        <!-- Progress bar -->
+        <div id="progressBar" class="progress">
+            <div id="progressFill" class="progress-fill"></div>
+        </div>
+        <div id="statusMsg" class="status">Load a MIDI file to start</div>
+
+        <!-- Download & Player -->
+        <div id="downloadArea" class="download-area hidden">
+            <a id="downloadLink" class="download-link" download="midi_audio.wav">⬇️ Download WAV</a>
+            <audio id="audioPlayer" controls></audio>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            // ---------- DOM elements ----------
+            const dropZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('fileInput');
+            const fileNameEl = document.getElementById('fileName');
+            const trackInfoDiv = document.getElementById('trackInfo');
+            const infoContent = document.getElementById('infoContent');
+            const soundFontSelect = document.getElementById('soundFontSelect');
+            const customUrlInput = document.getElementById('customUrl');
+            const convertBtn = document.getElementById('convertBtn');
+            const progressBar = document.getElementById('progressBar');
+            const progressFill = document.getElementById('progressFill');
+            const statusMsg = document.getElementById('statusMsg');
+            const downloadArea = document.getElementById('downloadArea');
+            const downloadLink = document.getElementById('downloadLink');
+            const audioPlayer = document.getElementById('audioPlayer');
+
+            // ---------- State ----------
+            let midiData = null;                 // parsed MIDI object
+            let player = new WebAudioFontPlayer();
+            let programPerChannel = {};          // instrument per MIDI channel
+
+            // ---------- Setup ----------
+            fileInput.addEventListener('change', e => handleFiles(e.target.files));
+            dropZone.addEventListener('click', () => fileInput.click());
+            dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('active'); });
+            dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
+            dropZone.addEventListener('drop', e => {
+                e.preventDefault();
+                dropZone.classList.remove('active');
+                handleFiles(e.dataTransfer.files);
+            });
+            soundFontSelect.addEventListener('change', () => {
+                customUrlInput.classList.toggle('hidden', soundFontSelect.value !== 'custom');
+            });
+            convertBtn.addEventListener('click', startConversion);
+
+            function handleFiles(files) {
+                if (!files.length) return;
+                const file = files[0];
+                fileNameEl.textContent = file.name;
+                fileNameEl.classList.remove('hidden');
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const bytes = new Uint8Array(e.target.result);
+                        midiData = MidiParser.parse(bytes);
+                        extractInfo(midiData);
+                        convertBtn.disabled = false;
+                        statusMsg.textContent = `Loaded "${file.name}". Ready to convert.`;
+                    } catch (err) {
+                        statusMsg.textContent = 'Error parsing MIDI: ' + err.message;
+                        midiData = null;
+                        convertBtn.disabled = true;
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            }
+
+            // ---------- MIDI analysis + program change tracking ----------
+            function extractInfo(parsed) {
+                programPerChannel = {};
+                let output = '';
+                (parsed.track || []).forEach((track, idx) => {
+                    let noteCount = 0;
+                    let channels = new Set();
+                    let pgmMap = {};
+                    (track.event || []).forEach(ev => {
+                        if (ev.type === 0xC) {
+                            programPerChannel[ev.channel] = ev.data[0];
+                            pgmMap[ev.channel] = ev.data[0];
+                        }
+                        if (ev.type === 8 || (ev.type === 9 && ev.data[2] === 0)) {
+                            noteCount++; channels.add(ev.channel);
+                        } else if (ev.type === 9 && ev.data[2] > 0) {
+                            noteCount++; channels.add(ev.channel);
+                        }
+                    });
+                    if (noteCount > 0) {
+                        let instr = Array.from(channels).map(ch => {
+                            let prog = pgmMap[ch] ?? 0;
+                            return `ch${ch}: ${getGMName(prog)}`;
+                        }).join(', ');
+                        output += `Track ${idx+1}: ${noteCount} notes, ${instr}<br>`;
+                    }
+                });
+                infoContent.innerHTML = output || 'No notes found.';
+                trackInfoDiv.classList.remove('hidden');
+            }
+
+            function getGMName(program) {
+                const names = [
+                    "Acoustic Grand Piano","Bright Acoustic Piano","Electric Grand Piano","Honky-tonk Piano",
+                    "Electric Piano 1","Electric Piano 2","Harpsichord","Clavinet","Celesta","Glockenspiel",
+                    "Music Box","Vibraphone","Marimba","Xylophone","Tubular Bells","Dulcimer","Drawbar Organ",
+                    "Percussive Organ","Rock Organ","Church Organ","Reed Organ","Accordion","Harmonica",
+                    "Tango Accordion","Acoustic Guitar (nylon)","Acoustic Guitar (steel)","Electric Guitar (jazz)",
+                    "Electric Guitar (clean)","Electric Guitar (muted)","Overdriven Guitar","Distortion Guitar",
+                    "Guitar harmonics","Acoustic Bass","Electric Bass (finger)","Electric Bass (pick)","Fretless Bass",
+                    "Slap Bass 1","Slap Bass 2","Synth Bass 1","Synth Bass 2","Violin","Viola","Cello",
+                    "Contrabass","Tremolo Strings","Pizzicato Strings","Orchestral Harp","Timpani",
+                    "String Ensemble 1","String Ensemble 2","SynthStrings 1","SynthStrings 2","Choir Aahs",
+                    "Voice Oohs","Synth Voice","Orchestra Hit","Trumpet","Trombone","Tuba","Muted Trumpet",
+                    "French Horn","Brass Section","SynthBrass 1","SynthBrass 2","Soprano Sax","Alto Sax",
+                    "Tenor Sax","Baritone Sax","Oboe","English Horn","Bassoon","Clarinet","Piccolo","Flute",
+                    "Recorder","Pan Flute","Blown Bottle","Shakuhachi","Whistle","Ocarina","Lead 1 (square)",
+                    "Lead 2 (sawtooth)","Lead 3 (calliope)","Lead 4 (chiff)","Lead 5 (charang)","Lead 6 (voice)",
+                    "Lead 7 (fifths)","Lead 8 (bass+lead)","Pad 1 (new age)","Pad 2 (warm)","Pad 3 (polysynth)",
+                    "Pad 4 (choir)","Pad 5 (bowed)","Pad 6 (metallic)","Pad 7 (halo)","Pad 8 (sweep)",
+                    "FX 1 (rain)","FX 2 (soundtrack)","FX 3 (crystal)","FX 4 (atmosphere)","FX 5 (brightness)",
+                    "FX 6 (goblins)","FX 7 (echoes)","FX 8 (sci-fi)","Sitar","Banjo","Shamisen","Koto","Kalimba",
+                    "Bag pipe","Fiddle","Shanai","Tinkle Bell","Agogo","Steel Drums","Woodblock","Taiko Drum",
+                    "Melodic Tom","Synth Drum","Reverse Cymbal","Guitar Fret Noise","Breath Noise","Seashore",
+                    "Bird Tweet","Telephone Ring","Helicopter","Applause","Gunshot"
+                ];
+                return names[program] || `Program ${program}`;
+            }
+
+            // ---------- Conversion engine ----------
+            async function startConversion() {
+                if (!midiData) return;
+                convertBtn.disabled = true;
+                downloadArea.classList.add('hidden');
+                progressBar.style.display = 'block';
+                progressFill.style.width = '0%';
+                statusMsg.textContent = 'Preparing…';
+
+                try {
+                    // 1. Determine SoundFont URL
+                    let sfUrl;
+                    if (soundFontSelect.value === 'custom') {
+                        sfUrl = customUrlInput.value.trim();
+                        if (!sfUrl) throw new Error('Enter a SoundFont URL');
+                    } else {
+                        sfUrl = `https://surikov.github.io/webaudiofontdata/sound/${soundFontSelect.value}`;
+                    }
+
+                    // 2. Calculate total duration (for offline context)
+                    const totalSec = calculateDuration(midiData);
+                    const renderLength = Math.max(totalSec + 1.5, 2);
+                    const sampleRate = 44100;
+
+                    // 3. Create offline context
+                    const offlineCtx = new OfflineAudioContext(2, Math.ceil(renderLength * sampleRate), sampleRate);
+                    updateProgress(5);
+
+                    // 4. Load the soundfont into the SAME offline context
+                    statusMsg.textContent = 'Loading SoundFont…';
+                    await new Promise((resolve, reject) => {
+                        player.loadFont(offlineCtx, sfUrl, () => resolve(), (err) => reject(new Error('Font load failed: ' + err)));
+                    });
+                    updateProgress(15);
+
+                    // 5. Build note schedule (with program changes applied in order)
+                    const notes = buildNoteSchedule(midiData);
+                    updateProgress(25);
+
+                    // 6. Schedule notes into offline context
+                    statusMsg.textContent = 'Rendering instruments…';
+                    scheduleNotes(offlineCtx, notes);
+                    updateProgress(50);
+
+                    // 7. Render audio
+                    const audioBuffer = await offlineCtx.startRendering();
+                    updateProgress(90);
+
+                    // 8. Convert to WAV and enable download
+                    const wavBlob = audioBufferToWav(audioBuffer);
+                    const url = URL.createObjectURL(wavBlob);
+                    downloadLink.href = url;
+                    audioPlayer.src = url;
+                    downloadArea.classList.remove('hidden');
+                    updateProgress(100);
+                    statusMsg.textContent = '✅ Conversion complete! Download or play below.';
+                } catch (err) {
+                    statusMsg.textContent = '❌ Error: ' + err.message;
+                    console.error(err);
+                } finally {
+                    convertBtn.disabled = false;
+                    setTimeout(() => {
+                        progressBar.style.display = 'none';
+                        progressFill.style.width = '0%';
+                    }, 2000);
+                }
+            }
+
+            function updateProgress(percent) {
+                progressFill.style.width = percent + '%';
+            }
+
+            // ---------- Note schedule from MIDI with program changes ----------
+            function buildNoteSchedule(parsed) {
+                const ticksPerQn = parsed.timeDivision;
+                // Collect all tempo events
+                let tempoEvents = [];
+                (parsed.track || []).forEach(track => {
+                    let tick = 0;
+                    (track.event || []).forEach(ev => {
+                        tick += ev.deltaTime;
+                        if (ev.type === 0xFF && ev.metaType === 0x51) {
+                            const micro = (ev.data[0] << 16) | (ev.data[1] << 8) | ev.data[2];
+                            tempoEvents.push({ tick, bpm: 60000000 / micro });
+                        }
+                    });
+                });
+                if (!tempoEvents.length) tempoEvents.push({ tick: 0, bpm: 120 });
+                tempoEvents.sort((a, b) => a.tick - b.tick);
+
+                // Collect all note & program change events in order
+                let eventQueue = [];   // { tick, type: 'noteon'/'noteoff'/'program', channel, note, velocity, program }
+                (parsed.track || []).forEach(track => {
+                    let tick = 0;
+                    (track.event || []).forEach(ev => {
+                        tick += ev.deltaTime;
+                        if (ev.type === 0xC) {
+                            eventQueue.push({ tick, type: 'program', channel: ev.channel, program: ev.data[0] });
+                        } else if (ev.type === 8 || (ev.type === 9 && ev.data[2] === 0)) {
+                            eventQueue.push({ tick, type: 'noteoff', channel: ev.channel, note: ev.data[0] });
+                        } else if (ev.type === 9 && ev.data[2] > 0) {
+                            eventQueue.push({ tick, type: 'noteon', channel: ev.channel, note: ev.data[0], velocity: ev.data[2] });
+                        }
+                    });
+                });
+                eventQueue.sort((a, b) => a.tick - b.tick);
+
+                // Function to convert tick to seconds
+                const tickToSec = (tick) => {
+                    let sec = 0, lastTick = 0, lastBpm = tempoEvents[0].bpm;
+                    for (let t of tempoEvents) {
+                        if (t.tick > lastTick && tick > lastTick) {
+                            const end = Math.min(tick, t.tick);
+                            sec += ((end - lastTick) / ticksPerQn) * (60 / lastBpm);
+                        }
+                        lastTick = t.tick;
+                        lastBpm = t.bpm;
+                    }
+                    if (tick > lastTick) {
+                        sec += ((tick - lastTick) / ticksPerQn) * (60 / lastBpm);
+                    }
+                    return sec;
+                };
+
+                // Walk events, apply programs, track active notes
+                let activeNotes = {};   // key: `${channel}:${note}` -> { startTime, velocity, program }
+                let scheduledNotes = [];
+                let currentProgram = {}; // per channel
+
+                eventQueue.forEach(ev => {
+                    const time = tickToSec(ev.tick);
+                    if (ev.type === 'program') {
+                        currentProgram[ev.channel] = ev.program;
+                    } else if (ev.type === 'noteon') {
+                        const key = ev.channel + ':' + ev.note;
+                        activeNotes[key] = {
+                            startTime: time,
+                            velocity: ev.velocity,
+                            program: currentProgram[ev.channel] || 0
+                        };
+                    } else if (ev.type === 'noteoff') {
+                        const key = ev.channel + ':' + ev.note;
+                        const on = activeNotes[key];
+                        if (on) {
+                            const duration = time - on.startTime;
+                            if (duration > 0.005) {
+                                scheduledNotes.push({
+                                    channel: ev.channel,
+                                    note: ev.note,
+                                    startTime: on.startTime,
+                                    duration: duration,
+                                    velocity: on.velocity,
+                                    program: on.program
+                                });
+                            }
+                            delete activeNotes[key];
+                        }
+                    }
+                });
+
+                return scheduledNotes;
+            }
+
+            function calculateDuration(parsed) {
+                // Quick max tick across all events
+                let maxTick = 0;
+                (parsed.track || []).forEach(track => {
+                    let tick = 0;
+                    (track.event || []).forEach(ev => {
+                        tick += ev.deltaTime;
+                        if (tick > maxTick) maxTick = tick;
+                    });
+                });
+                const ticksPerQn = parsed.timeDivision;
+                // tempo map
+                let tempos = [];
+                (parsed.track || []).forEach(track => {
+                    let tick = 0;
+                    (track.event || []).forEach(ev => {
+                        tick += ev.deltaTime;
+                        if (ev.type === 0xFF && ev.metaType === 0x51) {
+                            const micro = (ev.data[0] << 16) | (ev.data[1] << 8) | ev.data[2];
+                            tempos.push({ tick, bpm: 60000000 / micro });
+                        }
+                    });
+                });
+                if (!tempos.length) tempos.push({ tick: 0, bpm: 120 });
+                tempos.sort((a, b) => a.tick - b.tick);
+
+                let sec = 0, lastTick = 0, lastBpm = tempos[0].bpm;
+                for (let t of tempos) {
+                    if (t.tick > lastTick && maxTick > lastTick) {
+                        const end = Math.min(maxTick, t.tick);
+                        sec += ((end - lastTick) / ticksPerQn) * (60 / lastBpm);
+                    }
+                    lastTick = t.tick;
+                    lastBpm = t.bpm;
+                }
+                if (maxTick > lastTick) {
+                    sec += ((maxTick - lastTick) / ticksPerQn) * (60 / lastBpm);
+                }
+                return sec;
+            }
+
+            // ---------- Schedule notes into offline context ----------
+            function scheduleNotes(ctx, notes) {
+                notes.forEach(n => {
+                    if (n.duration <= 0) return;
+                    const prog = n.program;
+                    const pitch = n.note;
+                    const start = Math.max(0, n.startTime);
+                    const dur = Math.max(0.001, n.duration);
+                    const vol = Math.min(1, n.velocity / 127);
+
+                    try {
+                        // Get the wave object for this program/note
+                        const info = player.loader.frameInfo(prog, pitch);
+                        if (!info) return;
+                        const wave = player.loader.waveTable(ctx, info.file, info.note);
+                        if (wave) {
+                            player.queueWaveTable(ctx, ctx.destination, wave, pitch, start, dur, vol);
+                        }
+                    } catch (e) {
+                        console.warn('Note scheduling warning', e);
+                    }
+                });
+            }
+
+            // ---------- AudioBuffer to WAV ----------
+            function audioBufferToWav(buffer) {
+                const numChannels = buffer.numberOfChannels;
+                const length = buffer.length;
+                const sampleRate = buffer.sampleRate;
+                const bitsPerSample = 16;
+                const blockAlign = numChannels * bitsPerSample / 8;
+                const byteRate = sampleRate * blockAlign;
+                const dataSize = length * blockAlign;
+                const headerSize = 44;
+                const arrayBuffer = new ArrayBuffer(headerSize + dataSize);
+                const view = new DataView(arrayBuffer);
+
+                function writeStr(offset, str) {
+                    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+                }
+                writeStr(0, 'RIFF');
+                view.setUint32(4, 36 + dataSize, true);
+                writeStr(8, 'WAVE');
+                writeStr(12, 'fmt ');
+                view.setUint32(16, 16, true);
+                view.setUint16(20, 1, true);  // PCM
+                view.setUint16(22, numChannels, true);
+                view.setUint32(24, sampleRate, true);
+                view.setUint32(28, byteRate, true);
+                view.setUint16(32, blockAlign, true);
+                view.setUint16(34, bitsPerSample, true);
+                writeStr(36, 'data');
+                view.setUint32(40, dataSize, true);
+
+                let channels = [];
+                for (let c = 0; c < numChannels; c++) channels.push(buffer.getChannelData(c));
+
+                let offset = 44;
+                for (let i = 0; i < length; i++) {
+                    for (let c = 0; c < numChannels; c++) {
+                        let sample = channels[c][i];
+                        sample = Math.max(-1, Math.min(1, sample));
+                        const int = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+                        view.setInt16(offset, int, true);
+                        offset += 2;
+                    }
+                }
+                return new Blob([arrayBuffer], { type: 'audio/wav' });
+            }
+        })();
+    </script>
+</body>
+</html>
